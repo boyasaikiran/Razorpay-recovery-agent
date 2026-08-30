@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Razorpay Test Payment</title>
+</head>
+
+<body>
+
+<h2>Recovery Orchestrator - Razorpay Test</h2>
+
+<button id="rzp-button">
+    Make Test Payment
+</button>
+
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+<script>
+
+document.getElementById("rzp-button").onclick = function () {
+
+    var options = {
+
+        key: "rzp_test_TVsKfzxTAepr6I",
+
+        amount: 10000,
+
+        currency: "INR",
+
+        name: "Recovery Orchestrator",
+
+        description: "Webhook Test Payment",
+
+        handler: function (response) {
+
+            console.log(response);
+
+        }
+
+    };
+
+    var rzp = new Razorpay(options);
+
+    rzp.open();
+
+};
+
+</script>
+
+</body>
+</html>
