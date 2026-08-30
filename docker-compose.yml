@@ -1,0 +1,109 @@
+# Recovery Orchestrator -- Docker Compose
+#
+# NOT RUN END-TO-END in the sandbox that authored this repository --
+# but not for the reason originally assumed. Docker itself CAN run
+# there: `apt-get install docker.io` and `dockerd` both succeed (full
+# init, buildkit ready, socket live), confirmed by actually doing it.
+# The real blocker is the sandbox's network egress allowlist, which
+# does not include any container registry (registry-1.docker.io
+# returns 403 with header `x-deny-reason: host_not_allowed`) -- so no
+# base image (python:3.12-slim, node:22-alpine, nginx:1.27-alpine,
+# postgres:16-alpine) can be pulled there, regardless of the daemon
+# working. Written carefully against the real app structure, real
+# dependency lists, and real environment variable names (cross-checked
+# against backend/app/core/config.py's Settings fields), and the /data
+# volume mount target was verified programmatically (not guessed)
+# against exactly how backend/app/ml/*.py and friends compute their
+# own file paths via Path(__file__).resolve().parents[N]. In an
+# environment with normal internet access, `docker compose up --build`
+# should work as written -- please run it and report back if anything
+# breaks.
+#
+# Usage:
+#   cp .env.example .env   # fill in a real API_KEY at minimum
+#   docker compose up --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: recovery_orchestrator
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d recovery_orchestrator"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: recovery-orchestrator
+      APP_ENV: ${APP_ENV:-production}
+      APP_VERSION: 0.1.0
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_V1_PREFIX: /api/v1
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/recovery_orchestrator
+      DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@postgres:5432/recovery_orchestrator
+
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      RAZORPAY_MODE: ${RAZORPAY_MODE:-simulated}
+
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-change-me-in-production}
+      API_KEY: ${API_KEY:?API_KEY must be set in .env -- see .env.example. Protected endpoints fail closed without it.}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_SIMULATE_EVENTS_PER_MINUTE: ${RATE_LIMIT_SIMULATE_EVENTS_PER_MINUTE:-300}
+      RATE_LIMIT_EVALUATION_PER_MINUTE: ${RATE_LIMIT_EVALUATION_PER_MINUTE:-10}
+    volumes:
+      # Mounts the trained model artifacts and synthetic/evaluation
+      # data generated on the host (Phases 5-7, 13) into the container
+      # at /data -- verified to match exactly what
+      # Path(__file__).resolve().parents[N] computes from inside the
+      # container for every file that references the data directory.
+      # NOT regenerated at container build/start time; run the
+      # training scripts on the host first (see README).
+      - ./data:/data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_KEY: ${API_KEY:?API_KEY must be set in .env -- baked into the frontend build. See frontend/src/services/api.ts for the documented security tradeoff of a browser-bundled key.}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+
+volumes:
+  postgres_data:
